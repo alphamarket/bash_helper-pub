@@ -15,3 +15,12 @@ function gitsa() {
 	# promt the success
 	echo -e "\e[32mThe Git Shortcut Aliases Are In Effect.\e[m"
 }
+
+# fixup a commit in the history, add/remove content/file from past commits
+# ref: https://stackoverflow.com/a/27721031/1198291
+function commit-fixup() {
+	git commit --fixup=$1
+	git stash
+	git rebase --interactive --autosquash $1^
+	git stash pop
+}
