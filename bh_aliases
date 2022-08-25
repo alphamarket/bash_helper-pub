@@ -28,6 +28,7 @@ alias pv='rsync -ah --progress $*'
 alias dl-tor='aria2c $*'
 alias dl-mtor='aria2c --follow-torrent=mem $*'
 alias now='date +"%Y/%m/%d %H:%M:%S"'
+alias kill-port='npx kill-port'
 
 # include compress aliases
 . $BASE_DIR/bh_aliases_compress
