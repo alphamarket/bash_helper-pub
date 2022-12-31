@@ -1,6 +1,6 @@
 #!/bin/bash
 
-cd $HOME
+pushd $HOME &>/dev/null
 
 if [ ! -f .bashrc ]; then
 	echo -e "\e[31mThe \`$HOME/.bashrc\` file does not exists!\e[m"
@@ -17,4 +17,9 @@ else
 	echo '
 # include bash helpers
 if [ -f $HOME/.bash_helper.d/bash_helper ]; then . $HOME/.bash_helper.d/bash_helper; fi' >> .bashrc
+
+curl -so ~/.git-prompt.sh https://raw.githubusercontent.com/git/git/master/contrib/completion/git-prompt.sh
+
+echo source $HOME/.git-prompt.sh >> $HOME/.bashrc
+
 fi
