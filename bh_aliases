@@ -5,6 +5,7 @@ alias l='ls -CF'
 alias pp='ping 8.8.8.8 -O'
 alias ..='cd ..'
 alias ...='cd ../..'
+alias ....='cd ../../..'
 alias ~='cd ~'
 alias open='xdg-open $* &>/dev/null'
 alias n='nano $*'
@@ -29,6 +30,8 @@ alias dl-tor='aria2c $*'
 alias dl-mtor='aria2c --follow-torrent=mem $*'
 alias now='date +"%Y/%m/%d %H:%M:%S"'
 alias kill-port='npx kill-port'
+alias ts='date +%s'
+alias myip='curl https://ifconfig.me'
 
 # include compress aliases
 . $BASE_DIR/bh_aliases_compress

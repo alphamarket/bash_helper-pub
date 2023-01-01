@@ -18,18 +18,12 @@ function genpasswd() {
    	[ "$l" == "" ] && l=16
   	tr -dc A-Za-z0-9_ < /dev/urandom | head -c ${l} | xargs
 }
-#!/bin/bash
 # up/down grid of a process by name
 function niceproc()
 {
     echo -e "\e[33m\c"
     sudo renice -n $2 -p `ps -A | grep $1 | cut -d '?' -f1`
     echo -e "\e[m\c"
-}
-# cd and ls
-function cd
-{
-    builtin cd "$@" && ls -F
 }
 # check if file exists
 function e()
