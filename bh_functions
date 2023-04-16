@@ -16,7 +16,7 @@ function str_find
 function genpasswd() {
 	local l=$1
    	[ "$l" == "" ] && l=16
-  	tr -dc A-Za-z0-9_ < /dev/urandom | head -c ${l} | xargs
+	tr -dc 'A-Za-z0-9_~!@#$^&*().,/;:[]{}\|' < /dev/urandom | head -c ${l} | xargs
 }
 # up/down grid of a process by name
 function niceproc()
