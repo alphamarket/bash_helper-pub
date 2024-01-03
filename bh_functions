@@ -16,7 +16,7 @@ function str_find
 function genpasswd() {
 	local l=$1
    	[ "$l" == "" ] && l=16
-	tr -dc 'A-Za-z0-9_~!@#$^&*().,/;:[]{}\|' < /dev/urandom | head -c ${l} | xargs
+	tr -dc 'A-Za-z0-9_~!@#$^&*().,/;:[]{}\|' < /dev/urandom | head -c ${l}
 }
 # up/down grid of a process by name
 function niceproc()
@@ -51,4 +51,17 @@ function count_code_line()
 function mp42mp3()
 {
     avconv -i "$1" -vn -acodec libmp3lame -ac 2 -ab 160k -ar 48000 "`basename "$1" .mp4`.mp3"
+}
+
+function videos2mp4() {
+	for file in ./*.*; do
+	    # Check if the file is a video file by its extension
+	    if [[ -f "$file" && "$file" =~ \.(avi|mkv|mov|wmv|flv|mpg|mpeg|mp4|webm)$ ]]; then
+	        # Extract the file name without the extension
+	        filename_without_extension=$(basename -- "$file")
+	        filename_without_extension="${filename_without_extension%.*}"
+	        # Convert the video to mp4 using ffmpeg
+	        ffmpeg -i "$file" $* "./$filename_without_extension.mp4"
+	    fi
+	done
 }
