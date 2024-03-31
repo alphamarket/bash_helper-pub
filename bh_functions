@@ -65,3 +65,16 @@ function videos2mp4() {
 	    fi
 	done
 }
+
+function videos2sub() {
+    for file in ./*.*; do
+        # Check if the file is a video file by its extension
+        if [[ -f "$file" && "$file" =~ \.(avi|mkv|mov|wmv|flv|mpg|mpeg|mp4|webm)$ ]]; then
+            # Extract the file name without the extension
+            filename_without_extension=$(basename -- "$file")
+            filename_without_extension="${filename_without_extension%.*}"
+            # Extract subtitles from the original file
+            ffmpeg -i "$file" -map 0:s:0 "./$filename_without_extension.srt"
+        fi
+    done
+}
