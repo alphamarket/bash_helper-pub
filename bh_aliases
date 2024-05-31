@@ -24,7 +24,7 @@ alias logout="pkill -u $USER"
 alias hl='du -shx * | sort -h'
 alias kstop='sudo service kerio-kvc stop'
 alias kstart='sudo service kerio-kvc start'
-alias dl='aria2c -j 16 -x 16 -s 16 $*'
+alias dl='aria2c -j 1 -x 16 -s 16 $*'
 alias pv='rsync -ah --progress $*'
 alias dl-tor='aria2c $*'
 alias dl-mtor='aria2c --follow-torrent=mem $*'
