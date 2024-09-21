@@ -48,12 +48,22 @@ function count_code_line()
     cat ${*:2} | sed "/^\s*$1/d;/^\s*$/d" | wc -l
 }
 
-function mp42mp3()
-{
-    avconv -i "$1" -vn -acodec libmp3lame -ac 2 -ab 160k -ar 48000 "`basename "$1" .mp4`.mp3"
+function videos2mp3() {
+	shopt -s nocasematch
+    for file in ./*.*; do
+        # Check if the file is a video file by its extension
+        if [[ -f "$file" && "$file" =~ \.(avi|mkv|mov|wmv|flv|mpg|mpeg|mp4|webm)$ ]]; then
+            # Extract the file name without the extension
+            filename_without_extension=$(basename -- "$file")
+            filename_without_extension="${filename_without_extension%.*}"
+            # Extract subtitles from the original file
+            ffmpeg -i "$file" -vn -ab 192k -ar 44100 "./$filename_without_extension.mp3"
+        fi
+    done
 }
 
 function videos2mp4() {
+	shopt -s nocasematch
 	for file in ./*.*; do
 	    # Check if the file is a video file by its extension
 	    if [[ -f "$file" && "$file" =~ \.(avi|mkv|mov|wmv|flv|mpg|mpeg|mp4|webm)$ ]]; then
@@ -67,6 +77,7 @@ function videos2mp4() {
 }
 
 function videos2sub() {
+	shopt -s nocasematch
     for file in ./*.*; do
         # Check if the file is a video file by its extension
         if [[ -f "$file" && "$file" =~ \.(avi|mkv|mov|wmv|flv|mpg|mpeg|mp4|webm)$ ]]; then
