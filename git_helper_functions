@@ -16,6 +16,21 @@ function gitsa() {
 	echo -e "\e[32mThe Git Shortcut Aliases Are In Effect.\e[m"
 }
 
+# Clean up local git branches that no longer exist on remote
+function clean-merged-branches() {
+  git fetch --prune
+
+  git for-each-ref --format '%(refname:short)' refs/heads/ | while read branch; do
+    if ! git show-ref --quiet --verify refs/remotes/origin/$branch; then
+      if [ "$branch" != "$(git symbolic-ref --short HEAD)" ]; then
+        echo "Deleting local branch: $branch"
+        git branch -D "$branch"
+      fi
+    fi
+  done
+}
+
+
 # fixup a commit in the history, add/remove content/file from past commits
 # ref: https://stackoverflow.com/a/27721031/1198291
 function commit-fixup() {
