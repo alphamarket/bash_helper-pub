@@ -89,3 +89,14 @@ function videos2sub() {
         fi
     done
 }
+
+function t() {
+	(
+		xfce4-terminal --working-directory="$(pwd)" 2>/dev/null || \
+		gnome-terminal --working-directory="$(pwd)" 2>/dev/null || \
+	 	konsole --workdir "$(pwd)" 2>/dev/null || \
+	 	mate-terminal --working-directory="$(pwd)" 2>/dev/null || \
+	 	lxterminal --working-directory="$(pwd)" 2>/dev/null || \
+	 	x-terminal-emulator --working-directory="$(pwd)" 2>/dev/null
+ 	)
+}
