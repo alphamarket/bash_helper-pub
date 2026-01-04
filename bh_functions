@@ -16,7 +16,12 @@ function str_find
 function genpasswd() {
 	local l=$1
    	[ "$l" == "" ] && l=16
-	tr -dc 'A-Za-z0-9_~!@#$^&*().,/;:[]{}\|' < /dev/urandom | head -c ${l}
+	tr -dc 'A-Za-z0-9_~!@#$^&*().,/;:[]{}\|-' < /dev/urandom | head -c ${l}
+}
+function genpasswd2() {
+	local l=$1
+   	[ "$l" == "" ] && l=16
+	tr -dc 'A-Za-z0-9_-' < /dev/urandom | head -c ${l}
 }
 # up/down grid of a process by name
 function niceproc()
@@ -98,5 +103,5 @@ function t() {
 	 	mate-terminal --working-directory="$(pwd)" 2>/dev/null || \
 	 	lxterminal --working-directory="$(pwd)" 2>/dev/null || \
 	 	x-terminal-emulator --working-directory="$(pwd)" 2>/dev/null
- 	)
+ 	)&
 }
