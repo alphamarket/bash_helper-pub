@@ -1,5 +1,21 @@
 #!/bin/bash
 
+# Run `git <subcmd>` inside a git repo; otherwise fall back to a local
+# ./<subcmd>-all script if present (e.g. ./status-all, ./diff-all, ./show-all).
+function _git_smart() {
+	local subcmd="$1"; shift
+	local local_script="./${subcmd}-all"
+	if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+		git "$subcmd" "$@"
+	elif [[ -x "$local_script" ]]; then
+		"$local_script" "$@"
+	elif [[ -e "$local_script" ]]; then
+		bash "$local_script" "$@"
+	else
+		git "$subcmd" "$@"
+	fi
+}
+
 # trying to load local .gitsa file if any exists
 function gitsa() {
 	localGITSA="`pwd`/.gitsa"
