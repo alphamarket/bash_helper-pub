@@ -1,0 +1,10 @@
+[Unit]
+Description=Reset NetworkManager DNS overrides to automatic at login (clean DNS slate each boot)
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.bash_helper.d/dns-autoreset
+
+[Install]
+WantedBy=default.target

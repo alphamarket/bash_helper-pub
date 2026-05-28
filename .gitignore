@@ -1,0 +1,3 @@
+# Local, machine-specific config — never commit (may contain secrets)
+bh_dns.local
+*.local

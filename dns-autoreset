@@ -1,0 +1,28 @@
+#!/bin/bash
+# Reset every NetworkManager connection's DNS override back to automatic.
+#
+# Run once per login by the dns-autoreset.service user unit, so each boot
+# starts on DHCP-provided DNS regardless of what dns-proxy/dns-default left in
+# the saved profiles. dns-proxy / dns-default re-apply within the session.
+# Only connections carrying a manual override are touched.
+
+command -v nmcli >/dev/null 2>&1 || exit 0
+
+while IFS= read -r uuid; do
+	[ -z "$uuid" ] && continue
+	dns4=$(nmcli -g ipv4.dns connection show "$uuid" 2>/dev/null)
+	dns6=$(nmcli -g ipv6.dns connection show "$uuid" 2>/dev/null)
+	ign4=$(nmcli -g ipv4.ignore-auto-dns connection show "$uuid" 2>/dev/null)
+	ign6=$(nmcli -g ipv6.ignore-auto-dns connection show "$uuid" 2>/dev/null)
+	if [ -n "$dns4" ] || [ -n "$dns6" ] || [ "$ign4" = "yes" ] || [ "$ign6" = "yes" ]; then
+		nmcli connection modify "$uuid" \
+			ipv4.ignore-auto-dns no ipv4.dns "" \
+			ipv6.ignore-auto-dns no ipv6.dns "" 2>/dev/null
+	fi
+done < <(nmcli -t -f UUID connection show 2>/dev/null)
+
+# Reapply to the live connection (no Wi-Fi drop) so resolved updates now.
+dev=$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')
+[ -n "$dev" ] && nmcli device reapply "$dev" >/dev/null 2>&1
+resolvectl flush-caches >/dev/null 2>&1
+exit 0

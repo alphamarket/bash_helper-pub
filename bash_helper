@@ -7,7 +7,7 @@ fi
 
 export BASE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-for source_file in bh_aliases bh_functions bh_inputrc git_helper_aliases git_helper_functions; do
+for source_file in bh_aliases bh_functions bh_dns bh_inputrc git_helper_aliases git_helper_functions; do
 	if [ -f "$BASE_DIR/$source_file" ]; then
 		source "$BASE_DIR/$source_file"
 	else
