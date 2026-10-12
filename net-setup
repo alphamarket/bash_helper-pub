@@ -1,0 +1,120 @@
+#!/bin/bash
+# net-setup — one-time root setup for a stable Wi-Fi link and stable DNS on
+# NetworkManager + systemd-resolved machines. Everything lands in config files,
+# so it survives reboots. Re-run safely any time; `--uninstall` reverts it.
+#
+#   sudo ~/.bash_helper.d/net-setup [--uninstall]
+#
+# 1. Wi-Fi power saving off (NetworkManager global default). With it on, the
+#    card naps between beacons; phone hotspots (Android) send irregular
+#    beacons, so the link gets dropped as "Connection to AP lost".
+# 2. Intel iwlmvm firmware power scheme -> active (1) instead of balanced (2).
+#    mac80211 connection monitor made patient: on beacon loss it probes the AP
+#    only twice (500 ms each) before dropping the link, so a phone hotspot that
+#    pauses its beacons for ~2 s (scanning, radio sharing) gets disconnected —
+#    and the VPN and every open connection with it — while data still flows.
+# 3. systemd-resolved: FallbackDNS for moments when no link has DNS (e.g. a
+#    VPN tunnel flapping) + StaleRetentionSec so cached answers keep working
+#    through short outages instead of failing with ENOTFOUND.
+# 4. NetworkManager dispatcher hook: on every connect/reconnect, pin DNS to
+#    the bh_dns choice (default resolvers unless dns-proxy ran this boot).
+set -u
+
+if [ "$(id -u)" -ne 0 ]; then
+	exec sudo "$(readlink -f "$0")" "$@"
+fi
+
+user="${SUDO_USER:-}"
+if [ -z "$user" ] || [ "$user" = "root" ]; then
+	echo "Run as your normal user with sudo: sudo $0" >&2
+	exit 1
+fi
+home=$(getent passwd "$user" | cut -d: -f6)
+dir=$(dirname "$(readlink -f "$0")")
+
+NM_WIFI=/etc/NetworkManager/conf.d/90-bh-wifi-powersave-off.conf
+IWL=/etc/modprobe.d/bh-iwlmvm-power.conf
+MAC80211=/etc/modprobe.d/bh-mac80211-patient.conf
+RESOLVED=/etc/systemd/resolved.conf.d/90-bh-dns.conf
+HOOK=/etc/NetworkManager/dispatcher.d/90-bh-dns-pin
+
+ok()   { printf '\033[1;32m==>\033[0m %s\n' "$1"; }
+head_(){ printf '\033[1;34m==>\033[0m \033[1m%s\033[0m\n' "$1"; }
+
+if [ "${1:-}" = "--uninstall" ]; then
+	head_ "Removing net-setup system files"
+	rm -f "$NM_WIFI" "$IWL" "$MAC80211" "$RESOLVED" "$HOOK"
+	systemctl reload NetworkManager
+	systemctl restart systemd-resolved
+	ok "Removed (driver settings revert on next boot)"
+	exit 0
+fi
+
+# Fallback resolvers follow the user's dns-default choice.
+servers=$(sudo -u "$user" bash -c '. "$1/bh_dns" >/dev/null 2>&1; printf %s "$DNS_DEFAULT_SERVERS"' _ "$dir")
+servers="${servers:-1.1.1.1 8.8.8.8}"
+state="${home}/.local/state/bh_dns/servers"
+
+head_ "Wi-Fi power saving: off"
+cat > "$NM_WIFI" <<CONF
+# Installed by ~/.bash_helper.d/net-setup — disable Wi-Fi power saving.
+# 2 = disable. Overrides the distro's default-wifi-powersave-on.conf (3 = on),
+# which makes phone hotspots drop with "Connection to AP lost".
+[connection]
+wifi.powersave = 2
+CONF
+systemctl reload NetworkManager
+for dev in $(nmcli -t -f DEVICE,TYPE device status | awk -F: '$2=="wifi"{print $1}'); do
+	iwconfig "$dev" power off 2>/dev/null || iw dev "$dev" set power_save off 2>/dev/null
+done
+ok "$NM_WIFI (live now)"
+
+if modinfo iwlmvm >/dev/null 2>&1; then
+	head_ "Intel Wi-Fi firmware power scheme: active"
+	cat > "$IWL" <<CONF
+# Installed by ~/.bash_helper.d/net-setup — 1 = active (no firmware power
+# saving), keeps the radio awake for hotspot beacons. Default is 2 (balanced).
+options iwlmvm power_scheme=1
+CONF
+	ok "$IWL (applies from next boot)"
+fi
+
+head_ "Wi-Fi link monitor: tolerate short beacon gaps"
+cat > "$MAC80211" <<CONF
+# Installed by ~/.bash_helper.d/net-setup — probe a silent AP for ~10 s before
+# declaring it lost (default ~1-3 s), so short hotspot beacon pauses don't
+# drop the link. Defaults: beacon_loss_count=7 max_nullfunc_tries=2
+# max_probe_tries=5 probe_wait_ms=500.
+options mac80211 beacon_loss_count=30 max_nullfunc_tries=10 max_probe_tries=10 probe_wait_ms=1000
+CONF
+p=/sys/module/mac80211/parameters
+if [ -d "$p" ]; then
+	echo 30   > "$p/beacon_loss_count"
+	echo 10   > "$p/max_nullfunc_tries"
+	echo 10   > "$p/max_probe_tries"
+	echo 1000 > "$p/probe_wait_ms"
+fi
+ok "$MAC80211 (live now)"
+
+head_ "systemd-resolved: fallback DNS + stale-cache retention"
+mkdir -p "${RESOLVED%/*}"
+cat > "$RESOLVED" <<CONF
+# Installed by ~/.bash_helper.d/net-setup.
+# FallbackDNS is used only when no link has DNS (e.g. a VPN tunnel restarting);
+# StaleRetentionSec serves cached answers while upstream is briefly unreachable
+# instead of failing lookups (ENOTFOUND) during Wi-Fi/VPN blips.
+[Resolve]
+FallbackDNS=${servers}
+StaleRetentionSec=1d
+CONF
+systemctl restart systemd-resolved
+ok "$RESOLVED (fallback: $servers)"
+
+head_ "Pin DNS on new networks"
+sed -e "s|@DNS_STATE_FILE@|${state}|" -e "s|@DNS_DEFAULT_SERVERS@|${servers}|" \
+	"$dir/dns-pin.dispatcher" > "$HOOK"
+chown root:root "$HOOK"
+chmod 755 "$HOOK"
+ok "$HOOK (default $servers; dns-proxy choice from $state)"
+
+ok "Done — all settings persist across reboots"

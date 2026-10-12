@@ -3,16 +3,20 @@
 #
 # Writing /etc/resolv.conf directly does NOT stick here: it is a symlink to
 # systemd-resolved's runtime stub, which resolved rewrites on every network
-# event. Setting the DNS on the active NM connection (ignore-auto-dns) makes
-# NM re-push our servers into resolved on every (re)connect, so the choice
-# holds across reconnects / Wi-Fi off-on within a session.
+# event. Setting the DNS on EVERY saved NM connection (ignore-auto-dns) makes
+# NM re-push our servers into resolved on every (re)connect — Wi-Fi, wired,
+# and VPN tunnels alike — so the choice holds across reconnects, network
+# switches and VPN up/down.
 #
-# By design the choice does NOT survive a reboot: a per-user `dns-autoreset`
-# service (installed lazily the first time you switch DNS) clears all DNS
-# overrides back to automatic at each login, so every boot starts on DHCP DNS
-# until you run dns-proxy again. The Shecan keepalive is likewise ephemeral
-# (a transient user timer in /run). Net effect: full, explicit control —
-# nothing DNS-related lingers past a reboot.
+# Each boot starts on $DNS_BOOT_MODE: a per-user `dns-autoreset` service
+# (installed lazily the first time you switch DNS) re-pins every connection at
+# login — to $DNS_DEFAULT_SERVERS by default, or to DHCP with
+# DNS_BOOT_MODE=auto. dns-proxy therefore holds until the next reboot (the
+# Shecan keepalive is likewise ephemeral — a transient user timer in /run).
+#
+# The pinned servers are mirrored to $DNS_STATE_FILE, which the optional root
+# hook installed by `net-setup` reads to pin brand-new networks on first
+# connect too.
 #
 # nmcli/resolvectl run without sudo because polkit grants the active local user
 # settings.modify.system (verify with `nmcli general permissions`).
@@ -21,6 +25,7 @@
 # bh_dns.local (gitignored) or the environment:
 #   DNS_PROXY_SERVERS    resolvers for dns-proxy   (default: Shecan)
 #   DNS_DEFAULT_SERVERS  resolvers for dns-default (default: Cloudflare+Google)
+#   DNS_BOOT_MODE        what each login starts on: default | auto (default: default)
 #   SHECAN_DDNS_URL      your private Shecan keepalive URL (use dns-keepalive-setup)
 SHECAN_DDNS_UNIT='shecan-ddns'
 __bh_dns_local="${BASH_SOURCE[0]%/*}/bh_dns.local"
@@ -28,6 +33,8 @@ __bh_dns_local="${BASH_SOURCE[0]%/*}/bh_dns.local"
 unset __bh_dns_local
 : "${DNS_PROXY_SERVERS:=178.22.122.101 185.51.200.1}"
 : "${DNS_DEFAULT_SERVERS:=1.1.1.1 8.8.8.8}"
+: "${DNS_BOOT_MODE:=default}"
+DNS_STATE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/bh_dns/servers"
 SHECAN_DDNS_URL="${SHECAN_DDNS_URL:-}"
 
 # ---- console output helpers (consistent, professional formatting) ----------
@@ -37,52 +44,98 @@ __dns_warn() { printf '\033[1;33m==>\033[0m %s\n' "$1" >&2; }
 __dns_err()  { printf '\033[1;31m==>\033[0m %s\n' "$1" >&2; }
 __dns_kv()   { printf '    \033[2m%-10s\033[0m %s\n' "$1" "$2"; }
 
+# Device carrying the current default route (may be a VPN tunnel).
+__dns_default_dev() {
+	ip route show default 2>/dev/null | awk '/default/ {print $5; exit}'
+}
+
 # Name of the NM connection backing the current default route.
 __dns_active_conn() {
 	local dev conn
-	dev=$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')
+	dev=$(__dns_default_dev)
 	[ -z "$dev" ] && return 1
 	conn=$(nmcli -t -f GENERAL.CONNECTION device show "$dev" 2>/dev/null | cut -d: -f2-)
 	[ -z "$conn" ] && return 1
 	printf '%s' "$conn"
 }
 
+# Pin every saved connection to the given resolvers ("auto" = back to DHCP),
+# reapply the live devices and record the choice in $DNS_STATE_FILE. Pinning
+# all profiles (not just the active one) is what makes the choice survive
+# network switches and VPN tunnels, which otherwise bring their own DNS.
+__dns_pin_all() {
+	local want="$*" dns4 uuid type ign4 dev failed=0
+	if [ "$want" = "auto" ]; then
+		dns4=""
+	else
+		dns4="${want// /,}"
+	fi
+	while IFS=: read -r uuid type; do
+		case "$type" in loopback|bridge|"") continue ;; esac
+		if [ -z "$dns4" ]; then
+			[ -z "$(nmcli -g ipv4.dns connection show "$uuid" 2>/dev/null)" ] &&
+				[ "$(nmcli -g ipv4.ignore-auto-dns connection show "$uuid" 2>/dev/null)" = "no" ] &&
+				[ -z "$(nmcli -g ipv6.dns connection show "$uuid" 2>/dev/null)" ] && continue
+			nmcli connection modify "$uuid" \
+				ipv4.ignore-auto-dns no ipv4.dns "" \
+				ipv6.ignore-auto-dns no ipv6.dns "" >/dev/null 2>&1 || failed=1
+		else
+			ign4=$(nmcli -g ipv4.ignore-auto-dns connection show "$uuid" 2>/dev/null)
+			[ "$(nmcli -g ipv4.dns connection show "$uuid" 2>/dev/null)" = "$dns4" ] && [ "$ign4" = "yes" ] && continue
+			# ipv6 cleared + ignored so AAAA lookups don't leak past these resolvers.
+			nmcli connection modify "$uuid" \
+				ipv4.ignore-auto-dns yes ipv4.dns "$dns4" \
+				ipv6.ignore-auto-dns yes ipv6.dns "" >/dev/null 2>&1 || failed=1
+		fi
+	done < <(nmcli -t -f UUID,TYPE connection show 2>/dev/null)
+
+	# Live devices pick the change up without dropping the link.
+	while IFS=: read -r dev type; do
+		case "$type" in loopback|bridge|wifi-p2p) continue ;; esac
+		nmcli device reapply "$dev" >/dev/null 2>&1
+	done < <(nmcli -t -f DEVICE,TYPE,STATE device status 2>/dev/null | awk -F: '$3 ~ /^connected/ {print $1":"$2}')
+	resolvectl flush-caches >/dev/null 2>&1
+
+	mkdir -p "${DNS_STATE_FILE%/*}" && printf '%s\n' "$want" > "$DNS_STATE_FILE"
+	return "$failed"
+}
+
+# Boot-time entry point (run by dns-autoreset at login): start on DNS_BOOT_MODE.
+__dns_boot_reset() {
+	if [ "$DNS_BOOT_MODE" = "auto" ]; then
+		__dns_pin_all auto
+	else
+		__dns_pin_all $DNS_DEFAULT_SERVERS
+	fi
+}
+
 # Lazily install + enable the boot-time DNS auto-reset, exactly once. Called
 # only from dns-change, so it never gets set up for users who don't switch DNS.
 __dns_ensure_autoreset() {
 	command -v systemctl >/dev/null 2>&1 || return 0
-	systemctl --user is-enabled dns-autoreset.service >/dev/null 2>&1 && return 0
-
 	local dir src dst
 	dir="${BASH_SOURCE[0]%/*}"
 	src="$dir/dns-autoreset.service"
 	[ -r "$src" ] || return 0
 	dst="$HOME/.config/systemd/user"
+	systemctl --user is-enabled dns-autoreset.service >/dev/null 2>&1 &&
+		cmp -s "$src" "$dst/dns-autoreset.service" && return 0
+
 	mkdir -p "$dst"
 	cp -f "$src" "$dst/dns-autoreset.service"
 	[ -f "$dir/dns-autoreset" ] && chmod +x "$dir/dns-autoreset"
 	systemctl --user daemon-reload >/dev/null 2>&1
 	if systemctl --user enable dns-autoreset.service >/dev/null 2>&1; then
-		__dns_ok "Boot reset installed — DNS returns to automatic on each login"
+		__dns_ok "Boot reset installed — each login starts on '$DNS_BOOT_MODE' DNS"
 	else
 		__dns_warn "Could not enable boot DNS auto-reset service"
 	fi
 }
 
-# Reapply the active connection (no Wi-Fi drop) and flush the resolver cache.
-__dns_apply() {
-	local dev conn
-	dev=$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')
-	conn=$(__dns_active_conn)
-	nmcli device reapply "$dev" >/dev/null 2>&1 \
-		|| nmcli connection up "$conn" >/dev/null 2>&1
-	resolvectl flush-caches >/dev/null 2>&1
-}
-
 # Connection + configured resolvers (consistent across every command).
 __dns_show() {
 	local dev conn servers
-	dev=$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')
+	dev=$(__dns_default_dev)
 	conn=$(__dns_active_conn)
 	servers=$(resolvectl status "$dev" 2>/dev/null | sed -n 's/.*DNS Servers: //p' | head -1)
 	[ -z "$servers" ] && servers=$(resolvectl status "$dev" 2>/dev/null | sed -n 's/.*Current DNS Server: //p' | head -1)
@@ -133,7 +186,7 @@ __shecan_ddns_stop() {
 	fi
 }
 
-# dns-change <server1> [server2 ...] — pin these resolvers for the session.
+# dns-change <server1> [server2 ...] — pin these resolvers until the next boot.
 dns-change() {
 	if ! command -v nmcli >/dev/null 2>&1; then
 		__dns_err "NetworkManager (nmcli) not found — cannot set DNS."
@@ -144,23 +197,13 @@ dns-change() {
 		return 1
 	fi
 
-	local conn
-	conn=$(__dns_active_conn) || {
-		__dns_err "No active network connection found."
-		return 1
-	}
-
-	__dns_head "Setting DNS on $conn"
-	# ipv6 cleared + ignored so AAAA lookups don't leak past these resolvers.
-	if ! nmcli connection modify "$conn" \
-		ipv4.ignore-auto-dns yes ipv4.dns "$*" \
-		ipv6.ignore-auto-dns yes ipv6.dns ""; then
-		__dns_err "Failed to update connection settings."
+	__dns_head "Setting DNS to $* on all connections"
+	if ! __dns_pin_all "$@"; then
+		__dns_err "Failed to update some connection settings."
 		return 1
 	fi
-	__dns_apply
 	__dns_ensure_autoreset
-	__dns_ok "DNS applied — holds until reboot or dns-default/dns-auto"
+	__dns_ok "DNS applied — holds across reconnects until reboot (boot mode: $DNS_BOOT_MODE)"
 	return 0
 }
 
@@ -178,23 +221,15 @@ dns-default() {
 	dns-status
 }
 
-# dns-auto — hand DNS back to the network (DHCP); stops Shecan keepalive.
+# dns-auto — hand DNS back to the network (DHCP) until reboot; stops keepalive.
 dns-auto() {
 	__shecan_ddns_stop
-	local conn
-	conn=$(__dns_active_conn) || {
-		__dns_err "No active network connection found."
-		return 1
-	}
-	__dns_head "Restoring automatic DNS on $conn"
-	if ! nmcli connection modify "$conn" \
-		ipv4.ignore-auto-dns no ipv4.dns "" \
-		ipv6.ignore-auto-dns no ipv6.dns ""; then
-		__dns_err "Failed to update connection settings."
+	__dns_head "Restoring automatic DNS on all connections"
+	if ! __dns_pin_all auto; then
+		__dns_err "Failed to update some connection settings."
 		return 1
 	fi
-	__dns_apply
-	__dns_ok "DNS restored to network defaults (DHCP)"
+	__dns_ok "DNS restored to network defaults (DHCP) until the next boot"
 	dns-status
 	return 0
 }
@@ -204,7 +239,7 @@ dns-status() {
 	local dev current
 	__dns_head "DNS status"
 	__dns_show
-	dev=$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')
+	dev=$(__dns_default_dev)
 	current=$(resolvectl status "$dev" 2>/dev/null | sed -n 's/.*Current DNS Server: //p' | head -1)
 	[ -n "$current" ] && __dns_kv "Active" "$current"
 	if systemctl --user is-active "${SHECAN_DDNS_UNIT}.timer" >/dev/null 2>&1; then
@@ -213,9 +248,14 @@ dns-status() {
 		printf '    \033[2m%-10s\033[0m \033[90m%s\033[0m\n' "Keepalive" "inactive"
 	fi
 	if systemctl --user is-enabled dns-autoreset.service >/dev/null 2>&1; then
-		printf '    \033[2m%-10s\033[0m \033[32m%s\033[0m\n' "Boot reset" "enabled"
+		printf '    \033[2m%-10s\033[0m \033[32m%s\033[0m\n' "Boot mode" "$DNS_BOOT_MODE"
 	else
-		printf '    \033[2m%-10s\033[0m \033[90m%s\033[0m\n' "Boot reset" "not set up"
+		printf '    \033[2m%-10s\033[0m \033[90m%s\033[0m\n' "Boot mode" "not set up"
+	fi
+	if [ -x /etc/NetworkManager/dispatcher.d/90-bh-dns-pin ]; then
+		printf '    \033[2m%-10s\033[0m \033[32m%s\033[0m\n' "New nets" "pinned (net-setup)"
+	else
+		printf '    \033[2m%-10s\033[0m \033[90m%s\033[0m\n' "New nets" "DHCP until next dns-* (run net-setup)"
 	fi
 }
 
@@ -232,6 +272,7 @@ dns-help() {
 	printf "$fmt" "dns-default-ip-setup" "set the resolvers used by dns-default"
 	printf "$fmt" "dns-keepalive-setup"  "store your private Shecan keepalive password"
 	printf "$fmt" "dns-uninstall"        "clean teardown of all DNS tooling state"
+	printf "$fmt" "sudo net-setup"       "one-time: stable Wi-Fi + pin DNS on new networks"
 	printf "$fmt" "dns-help"             "show this help"
 	__dns_head "Configured resolvers (set via the *-ip-setup commands)"
 	__dns_kv "proxy"   "${DNS_PROXY_SERVERS}"
@@ -321,13 +362,9 @@ dns-uninstall() {
 		systemctl --user reset-failed dns-autoreset.service >/dev/null 2>&1
 		__dns_ok "Boot DNS auto-reset disabled and removed"
 	fi
-	local conn
-	if conn=$(__dns_active_conn); then
-		nmcli connection modify "$conn" \
-			ipv4.ignore-auto-dns no ipv4.dns "" \
-			ipv6.ignore-auto-dns no ipv6.dns "" >/dev/null 2>&1
-		__dns_apply
-		__dns_ok "DNS restored to automatic (DHCP)"
-	fi
+	__dns_pin_all auto && __dns_ok "DNS restored to automatic (DHCP) on all connections"
+	rm -f "$DNS_STATE_FILE"
+	[ -e /etc/NetworkManager/dispatcher.d/90-bh-dns-pin ] &&
+		__dns_warn "System hooks remain — remove them with: sudo ~/.bash_helper.d/net-setup --uninstall"
 	__dns_ok "Clean — commands stay; your password file (bh_dns.local) was kept"
 }

@@ -1,5 +1,5 @@
 [Unit]
-Description=Reset NetworkManager DNS overrides to automatic at login (clean DNS slate each boot)
+Description=Re-pin NetworkManager DNS to the boot mode at login (1.1.1.1 + 8.8.8.8 by default)
 After=default.target
 
 [Service]

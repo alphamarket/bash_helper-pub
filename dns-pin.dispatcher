@@ -1,0 +1,43 @@
+#!/bin/bash
+# NetworkManager dispatcher hook — installed by `net-setup` as
+# /etc/NetworkManager/dispatcher.d/90-bh-dns-pin.
+#
+# Pins any connection that comes up with different DNS to the resolvers last
+# chosen via dns-default/dns-proxy/dns-change (mirrored by bh_dns into the
+# state file below), on every connect/reconnect. A choice older than the
+# current boot is ignored in favour of DEFAULT, so each boot starts on the
+# default resolvers even before login. Covers brand-new networks and VPN
+# tunnels that push their own DNS. "auto" in the state file = leave alone.
+
+STATE='@DNS_STATE_FILE@'
+DEFAULT='@DNS_DEFAULT_SERVERS@'
+
+case "$2" in up|vpn-up) ;; *) exit 0 ;; esac
+[ -n "$CONNECTION_UUID" ] || exit 0
+want="$DEFAULT"
+boot=$(( $(date +%s) - $(cut -d. -f1 /proc/uptime) ))
+if [ -r "$STATE" ] && [ "$(stat -c %Y "$STATE")" -ge "$boot" ]; then
+	want=$(head -n1 "$STATE")
+fi
+[ -z "$want" ] || [ "$want" = "auto" ] && exit 0
+
+case "$(nmcli -g connection.type connection show "$CONNECTION_UUID" 2>/dev/null)" in
+	loopback|bridge|"") exit 0 ;;
+esac
+dns4="${want// /,}"
+[ "$(nmcli -g ipv4.dns connection show "$CONNECTION_UUID")" = "$dns4" ] &&
+	[ "$(nmcli -g ipv4.ignore-auto-dns connection show "$CONNECTION_UUID")" = "yes" ] && exit 0
+
+nmcli connection modify "$CONNECTION_UUID" \
+	ipv4.ignore-auto-dns yes ipv4.dns "$dns4" \
+	ipv6.ignore-auto-dns yes ipv6.dns "" || exit 0
+
+# Push it live: reapply the device, or (VPN tunnels can't reapply) set it in resolved.
+iface="${VPN_IP_IFACE:-$DEVICE_IP_IFACE}"
+iface="${iface:-$1}"
+if [ "$2" = "vpn-up" ] || ! nmcli device reapply "$iface" >/dev/null 2>&1; then
+	resolvectl dns "$iface" $want 2>/dev/null
+fi
+resolvectl flush-caches 2>/dev/null
+logger -t bh-dns-pin "pinned $CONNECTION_ID ($iface) to $want"
+exit 0
