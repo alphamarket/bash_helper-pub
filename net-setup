@@ -16,7 +16,12 @@
 # 3. systemd-resolved: FallbackDNS for moments when no link has DNS (e.g. a
 #    VPN tunnel flapping) + StaleRetentionSec so cached answers keep working
 #    through short outages instead of failing with ENOTFOUND.
-# 4. NetworkManager dispatcher hook: on every connect/reconnect, pin DNS to
+# 4. TCP tuned for a lossy mobile uplink carrying a TCP VPN tunnel: BBR
+#    congestion control (does not halve the rate on every random 4G loss) and
+#    linear retransmission timeouts for thin streams, so a lost tunnel packet
+#    costs ~0.2-1 s instead of multi-second exponential backoff that freezes
+#    everything inside the tunnel.
+# 5. NetworkManager dispatcher hook: on every connect/reconnect, pin DNS to
 #    the bh_dns choice (default resolvers unless dns-proxy ran this boot).
 set -u
 
@@ -37,13 +42,16 @@ IWL=/etc/modprobe.d/bh-iwlmvm-power.conf
 MAC80211=/etc/modprobe.d/bh-mac80211-patient.conf
 RESOLVED=/etc/systemd/resolved.conf.d/90-bh-dns.conf
 HOOK=/etc/NetworkManager/dispatcher.d/90-bh-dns-pin
+TCP_SYSCTL=/etc/sysctl.d/90-bh-tcp-mobile.conf
+TCP_MODULE=/etc/modules-load.d/bh-tcp-bbr.conf
 
 ok()   { printf '\033[1;32m==>\033[0m %s\n' "$1"; }
 head_(){ printf '\033[1;34m==>\033[0m \033[1m%s\033[0m\n' "$1"; }
 
 if [ "${1:-}" = "--uninstall" ]; then
 	head_ "Removing net-setup system files"
-	rm -f "$NM_WIFI" "$IWL" "$MAC80211" "$RESOLVED" "$HOOK"
+	rm -f "$NM_WIFI" "$IWL" "$MAC80211" "$RESOLVED" "$HOOK" "$TCP_SYSCTL" "$TCP_MODULE"
+	sysctl -q net.ipv4.tcp_congestion_control=cubic net.ipv4.tcp_thin_linear_timeouts=0
 	systemctl reload NetworkManager
 	systemctl restart systemd-resolved
 	ok "Removed (driver settings revert on next boot)"
@@ -109,6 +117,21 @@ StaleRetentionSec=1d
 CONF
 systemctl restart systemd-resolved
 ok "$RESOLVED (fallback: $servers)"
+
+head_ "TCP: BBR + linear timeouts for lossy mobile links"
+echo tcp_bbr > "$TCP_MODULE"
+cat > "$TCP_SYSCTL" <<CONF
+# Installed by ~/.bash_helper.d/net-setup — TCP for a lossy 4G uplink.
+# BBR does not treat every random loss as congestion; fq is its pacing qdisc.
+# thin_linear_timeouts: streams with few packets in flight retry at a linear
+# pace instead of doubling the timeout, shortening TCP-VPN tunnel freezes.
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.ipv4.tcp_thin_linear_timeouts = 1
+CONF
+modprobe tcp_bbr
+sysctl -q -p "$TCP_SYSCTL"
+ok "$TCP_SYSCTL (live now: $(sysctl -n net.ipv4.tcp_congestion_control), thin_linear=$(sysctl -n net.ipv4.tcp_thin_linear_timeouts))"
 
 head_ "Pin DNS on new networks"
 sed -e "s|@DNS_STATE_FILE@|${state}|" -e "s|@DNS_DEFAULT_SERVERS@|${servers}|" \
