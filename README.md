@@ -33,7 +33,7 @@ new shell and you're set.
 | `dns-status` | Show the active connection, resolvers, and keepalive state. |
 | `dns-keepalive-setup` | Store your own (private) Shecan keepalive password locally. |
 | `dns-uninstall` | Clean teardown of all DNS tooling state. |
-| `sudo net-setup` | Optional one-time system setup: Wi-Fi power saving off + a patient link monitor (stops phone-hotspot drops), TCP tuned for lossy 4G uplinks (BBR, linear timeouts), resolver fallback + stale cache through outages, and DNS pinned on every connect — including brand-new networks. `--uninstall` reverts it. |
+| `sudo net-setup` | Optional one-time system setup, everything persistent: installs missing tools (apt), Wi-Fi power saving off + a patient link monitor (stops phone-hotspot drops), TCP tuned for lossy 4G uplinks (BBR, linear timeouts), resolver fallback + stale cache through outages, DNS pinned on every connect — including brand-new networks — and per-user services `dns-autoreset` + `vpn-watchdog` (reconnects a VPN that shows connected but passes no traffic). `--uninstall` reverts it. |
 
 **Highlights**
 

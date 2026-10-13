@@ -1,0 +1,11 @@
+[Unit]
+Description=Reconnect a NetworkManager VPN that is connected but passes no traffic
+After=default.target
+
+[Service]
+ExecStart=%h/.bash_helper.d/vpn-watchdog
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

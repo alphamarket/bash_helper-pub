@@ -1,0 +1,65 @@
+#!/bin/bash
+# vpn-watchdog — revive a NetworkManager VPN that shows "connected" but is dead.
+#
+# OpenVPN restarts a stalled tunnel by itself (ping-restart). But when the
+# server then answers AUTH_FAILED (it still holds the previous session), the
+# NetworkManager plugin's openvpn waits for a password prompt that never comes:
+# NM keeps reporting the VPN as up while every packet goes into a dead tun0.
+# Re-activating the connection as the user (like a manual reconnect) lets the
+# secret agent supply the saved password again.
+#
+# Probes are deliberately patient (8 s ping, 15 s HTTPS): a congested TCP
+# tunnel on 4G can answer in 1-2 s, and reconnecting a slow-but-working tunnel
+# only adds downtime. Only a tunnel that passes nothing at all is restarted.
+#
+# Acts only while a VPN is active (a manual disconnect is respected) and only
+# when the physical uplink still answers — a Wi-Fi drop is not a VPN fault.
+#   DRY=1 vpn-watchdog   log decisions without reconnecting
+
+INTERVAL=${INTERVAL:-10}       # seconds between checks
+FAILS_NEEDED=${FAILS_NEEDED:-3} # consecutive dead checks before acting (~30 s)
+PROBES=${PROBES:-"1.1.1.1 8.8.8.8"}
+
+log() { logger -t vpn-watchdog "$*"; [ -t 1 ] && echo "$(date +%T) $*"; }
+
+alive() {
+	local ip
+	for ip in $PROBES; do
+		ping -c1 -W8 -q "$ip" >/dev/null 2>&1 && return 0
+	done
+	curl -s -o /dev/null -m15 https://1.1.1.1 && return 0
+	return 1
+}
+
+uplink_ok() {
+	local gw
+	gw=$(ip route show default | awk '$0 !~ /dev tun|dev wg|dev ppp/ {print $3; exit}')
+	[ -n "$gw" ] && ping -c1 -W2 -q "$gw" >/dev/null 2>&1
+}
+
+fails=0
+log "started (interval ${INTERVAL}s, act after ${FAILS_NEEDED} failed checks)"
+while true; do
+	vpn=$(nmcli -t -f NAME,TYPE connection show --active 2>/dev/null | awk -F: '$2=="vpn" {print $1; exit}')
+	if [ -z "$vpn" ] || alive; then
+		fails=0
+	elif ! uplink_ok; then
+		fails=0   # Wi-Fi/uplink itself is down; reconnecting the VPN would not help
+	else
+		fails=$((fails + 1))
+		if [ "$fails" -ge "$FAILS_NEEDED" ]; then
+			log "'$vpn' is up but passes no traffic for $((fails * INTERVAL))s (uplink fine) — reconnecting"
+			if [ -z "$DRY" ]; then
+				nmcli connection down "$vpn" >/dev/null 2>&1
+				sleep 3
+				if timeout 90 nmcli connection up "$vpn" >/dev/null 2>&1; then
+					log "'$vpn' reconnected"
+				else
+					log "'$vpn' reconnect failed — retrying next round"
+				fi
+			fi
+			fails=0
+		fi
+	fi
+	sleep "$INTERVAL"
+done

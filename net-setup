@@ -23,6 +23,11 @@
 #    everything inside the tunnel.
 # 5. NetworkManager dispatcher hook: on every connect/reconnect, pin DNS to
 #    the bh_dns choice (default resolvers unless dns-proxy ran this boot).
+# 6. Per-user services for the invoking user, enabled at every login:
+#    dns-autoreset (re-pin DNS to the boot mode) and vpn-watchdog (reconnect a
+#    VPN that shows "connected" but passes no traffic, e.g. OpenVPN stuck
+#    after AUTH_FAILED waiting for a password nobody supplies).
+# Missing command-line dependencies are installed first (apt).
 set -u
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -45,17 +50,50 @@ HOOK=/etc/NetworkManager/dispatcher.d/90-bh-dns-pin
 TCP_SYSCTL=/etc/sysctl.d/90-bh-tcp-mobile.conf
 TCP_MODULE=/etc/modules-load.d/bh-tcp-bbr.conf
 
+USER_UNITS="dns-autoreset vpn-watchdog"
+UNIT_DIR="$home/.config/systemd/user"
+uid=$(id -u "$user")
+
 ok()   { printf '\033[1;32m==>\033[0m %s\n' "$1"; }
 head_(){ printf '\033[1;34m==>\033[0m \033[1m%s\033[0m\n' "$1"; }
+warn() { printf '\033[1;33m==>\033[0m %s\n' "$1" >&2; }
+
+# systemctl --user for the invoking user; no-op when they have no live session
+# (the units are still enabled via their wants/ symlinks and start at login).
+user_ctl() {
+	[ -S "/run/user/$uid/bus" ] || return 0
+	sudo -u "$user" XDG_RUNTIME_DIR="/run/user/$uid" \
+		DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" systemctl --user "$@"
+}
 
 if [ "${1:-}" = "--uninstall" ]; then
 	head_ "Removing net-setup system files"
+	for u in $USER_UNITS; do
+		user_ctl disable --now "$u.service" >/dev/null 2>&1
+		rm -f "$UNIT_DIR/default.target.wants/$u.service" "$UNIT_DIR/$u.service"
+	done
+	user_ctl daemon-reload
 	rm -f "$NM_WIFI" "$IWL" "$MAC80211" "$RESOLVED" "$HOOK" "$TCP_SYSCTL" "$TCP_MODULE"
 	sysctl -q net.ipv4.tcp_congestion_control=cubic net.ipv4.tcp_thin_linear_timeouts=0
 	systemctl reload NetworkManager
 	systemctl restart systemd-resolved
-	ok "Removed (driver settings revert on next boot)"
+	ok "Removed, incl. user services $USER_UNITS (driver settings revert on next boot)"
 	exit 0
+fi
+
+head_ "Dependencies"
+need=()
+for pair in nmcli:network-manager resolvectl:systemd-resolved curl:curl ping:iputils-ping \
+	iw:iw iwconfig:wireless-tools logger:bsdutils modprobe:kmod sysctl:procps; do
+	command -v "${pair%%:*}" >/dev/null 2>&1 || need+=("${pair#*:}")
+done
+if [ ${#need[@]} -eq 0 ]; then
+	ok "all present"
+elif command -v apt-get >/dev/null 2>&1; then
+	apt-get install -y --no-install-recommends "${need[@]}" >/dev/null && ok "installed: ${need[*]}" ||
+		warn "could not install: ${need[*]} (offline?) — continuing"
+else
+	warn "missing: ${need[*]} — install them with your package manager"
 fi
 
 # Fallback resolvers follow the user's dns-default choice.
@@ -139,5 +177,17 @@ sed -e "s|@DNS_STATE_FILE@|${state}|" -e "s|@DNS_DEFAULT_SERVERS@|${servers}|" \
 chown root:root "$HOOK"
 chmod 755 "$HOOK"
 ok "$HOOK (default $servers; dns-proxy choice from $state)"
+
+head_ "User services for $user (start at every login)"
+install -d -o "$user" -g "$(id -gn "$user")" "$UNIT_DIR" "$UNIT_DIR/default.target.wants"
+for u in $USER_UNITS; do
+	install -m 644 -o "$user" -g "$(id -gn "$user")" "$dir/$u.service" "$UNIT_DIR/$u.service"
+	chmod 755 "$dir/$u"
+	ln -sfn "$UNIT_DIR/$u.service" "$UNIT_DIR/default.target.wants/$u.service"
+	chown -h "$user:$(id -gn "$user")" "$UNIT_DIR/default.target.wants/$u.service"
+done
+user_ctl daemon-reload
+user_ctl restart vpn-watchdog.service
+ok "$USER_UNITS enabled$([ -S "/run/user/$uid/bus" ] && echo ", vpn-watchdog running now" || echo " (start at next login)")"
 
 ok "Done — all settings persist across reboots"
