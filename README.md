@@ -242,7 +242,7 @@ sudo ~/.bash_helper.d/net-setup --uninstall  # revert everything
 | **Wi-Fi power saving off** | With it on, the card naps between beacons; Android hotspots beacon irregularly, so the link drops with *"Connection to AP lost"*. |
 | **Patient link monitor** (`mac80211`) | Gives a silent access point ~60 s instead of ~1 s before disconnecting, so a brief hotspot pause no longer takes down the link, the VPN and every open session. |
 | **Intel `iwlmvm` active power scheme** | Keeps Intel Wi-Fi cards (AX200/AX201/AX210…) fully awake for hotspot beacons. |
-| **TCP tuned for 4G** (BBR + linear timeouts) | A TCP-based VPN on a lossy mobile link freezes for seconds on every lost packet; this shortens those stalls. |
+| **TCP tuned for slow / lossy links** (BBR, linear timeouts, unsent-queue cap) | A TCP-based VPN on 4G freezes for seconds on lost packets, and on a slow tunnel its send queue grows to seconds of delay in front of every ping. BBR and linear timeouts shorten the stalls; `tcp_notsent_lowat` keeps the queue small without capping upload speed. Safe on fast links such as Starlink too. |
 | **DNS fallback + stale cache** (`systemd-resolved`) | Name resolution keeps working while a VPN tunnel restarts. |
 | **DNS pinned on every connect** (NetworkManager hook) | Every network — even a brand-new one — uses your chosen resolvers. |
 | **`vpn-watchdog`** (user service) | Reconnects a VPN that shows *connected* but has passed no traffic for ~30 s while Wi-Fi is fine — e.g. OpenVPN stuck after `AUTH_FAILED`, waiting for a password prompt that never appears. A slow-but-working tunnel is left alone, and a manual disconnect is respected. |
@@ -293,7 +293,7 @@ OpenVPN restarted the tunnel, the server rejected the quick re-login, and the Ne
 <details>
 <summary><b>Pings through the VPN freeze for seconds, then arrive all at once</b></summary>
 
-A TCP-based VPN (`proto tcp`) holds back everything behind a single lost packet until it is resent — the classic TCP-over-TCP stall on mobile data. `net-setup` enables BBR and linear retransmission timeouts to shorten these stalls; the complete cure is a UDP VPN endpoint, if your provider offers one.
+Two causes, both handled by `net-setup`: a TCP-based VPN (`proto tcp`) holds back everything behind a single lost packet until it is resent (BBR + linear retransmission timeouts shorten that), and on a slow tunnel the VPN's send queue grows to hundreds of KB — seconds of delay — whenever something uploads (`tcp_notsent_lowat` caps the queue, not the speed). The complete cure for the first is a UDP VPN endpoint, if your provider offers one.
 
 </details>
 

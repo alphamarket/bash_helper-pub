@@ -20,7 +20,8 @@
 #    congestion control (does not halve the rate on every random 4G loss) and
 #    linear retransmission timeouts for thin streams, so a lost tunnel packet
 #    costs ~0.2-1 s instead of multi-second exponential backoff that freezes
-#    everything inside the tunnel.
+#    everything inside the tunnel; and a cap on unsent data per socket
+#    (tcp_notsent_lowat) so a slow tunnel cannot build seconds of queue.
 # 5. NetworkManager dispatcher hook: on every connect/reconnect, pin DNS to
 #    the bh_dns choice (default resolvers unless dns-proxy ran this boot).
 # 6. Per-user services for the invoking user, enabled at every login:
@@ -74,7 +75,7 @@ if [ "${1:-}" = "--uninstall" ]; then
 	done
 	user_ctl daemon-reload
 	rm -f "$NM_WIFI" "$IWL" "$MAC80211" "$RESOLVED" "$HOOK" "$TCP_SYSCTL" "$TCP_MODULE"
-	sysctl -q net.ipv4.tcp_congestion_control=cubic net.ipv4.tcp_thin_linear_timeouts=0
+	sysctl -q net.ipv4.tcp_congestion_control=cubic net.ipv4.tcp_thin_linear_timeouts=0 net.ipv4.tcp_notsent_lowat=4294967295
 	systemctl reload NetworkManager
 	systemctl restart systemd-resolved
 	ok "Removed, incl. user services $USER_UNITS (driver settings revert on next boot)"
@@ -166,10 +167,14 @@ cat > "$TCP_SYSCTL" <<CONF
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 net.ipv4.tcp_thin_linear_timeouts = 1
+# notsent_lowat: cap unsent data queued per TCP socket. Without it, a TCP VPN
+# tunnel (OpenVPN proto tcp) on a slow link lets its send buffer grow to
+# hundreds of KB, i.e. seconds of queue in front of every ping and keystroke.
+net.ipv4.tcp_notsent_lowat = 16384
 CONF
 modprobe tcp_bbr
 sysctl -q -p "$TCP_SYSCTL"
-ok "$TCP_SYSCTL (live now: $(sysctl -n net.ipv4.tcp_congestion_control), thin_linear=$(sysctl -n net.ipv4.tcp_thin_linear_timeouts))"
+ok "$TCP_SYSCTL (live now: $(sysctl -n net.ipv4.tcp_congestion_control), thin_linear=$(sysctl -n net.ipv4.tcp_thin_linear_timeouts), notsent_lowat=$(sysctl -n net.ipv4.tcp_notsent_lowat))"
 
 head_ "Pin DNS on new networks"
 sed -e "s|@DNS_STATE_FILE@|${state}|" -e "s|@DNS_DEFAULT_SERVERS@|${servers}|" \
