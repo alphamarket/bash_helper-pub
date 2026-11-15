@@ -105,3 +105,35 @@ function t() {
 	 	x-terminal-emulator --working-directory="$(pwd)" 2>/dev/null
  	)&
 }
+
+# dlfast <url> — like `dl`, but up to 64 connections instead of 16, for servers
+# that throttle each connection. aria2c caps connections per host name, so the
+# same file is offered under several spellings of its host: the original link,
+# the URL it redirects to, and each with a trailing dot (`host.`, the same
+# server). Resumes from an existing `<file>.aria2` in the current directory —
+# stop the old download with Ctrl-C first.
+function dlfast() {
+	local url="$1" name final u host
+	local -a uris=()
+	if [ -z "$url" ]; then
+		echo "usage: dlfast <url>" >&2
+		return 1
+	fi
+	name=$(basename -- "${url%%\?*}")
+	name=$(printf '%b' "${name//%/\\x}")
+	if pgrep -ax aria2c | grep -qF -- "$name"; then
+		echo -e "\e[33maria2c is already downloading \`$name\` — press Ctrl-C in that terminal first.\e[m" >&2
+		return 1
+	fi
+	final=$(curl -s -o /dev/null -m 15 -L -r 0-0 -w '%{url_effective}' "$url")
+	for u in "$url" ${final:+"$final"}; do
+		host=$(sed -E 's#^[a-zA-Z]+://([^/:]+).*#\1#' <<<"$u")
+		uris+=("$u" "${u/$host/$host.}")
+	done
+	mapfile -t uris < <(printf '%s\n' "${uris[@]}" | awk '!seen[$0]++')
+	echo "File: $name"
+	echo "Sources: ${#uris[@]} (up to $(( ${#uris[@]} * 16 )) connections)"
+	[ -f "$name.aria2" ] && echo "Resuming from $name.aria2"
+	aria2c -c -o "$name" -x 16 -s $(( ${#uris[@]} * 16 )) -k 1M \
+		--file-allocation=none --summary-interval=60 "${uris[@]}"
+}

@@ -146,6 +146,7 @@ Defined in `bh_functions`.
 | `videos2mp4 [ffmpeg options]` | Convert every video in the current directory to MP4 |
 | `videos2sub` | Extract the first subtitle track of every video to `.srt` |
 | `t` | Open a new terminal window in the current directory (Xfce, GNOME, KDE, MATE, LXDE…) |
+| `dlfast <url>` | Download with up to 64 `aria2c` connections. aria2c allows only 16 per host, so the file is also requested via its redirect target and the `host.` spelling of each host. Resumes a stopped `dl`/`dlfast` from its `.aria2` file — press Ctrl-C on the old one first |
 
 ## Archive shortcuts
 
