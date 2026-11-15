@@ -106,34 +106,53 @@ function t() {
  	)&
 }
 
-# dlfast <url> — like `dl`, but up to 64 connections instead of 16, for servers
-# that throttle each connection. aria2c caps connections per host name, so the
-# same file is offered under several spellings of its host: the original link,
-# the URL it redirects to, and each with a trailing dot (`host.`, the same
-# server). Resumes from an existing `<file>.aria2` in the current directory —
-# stop the old download with Ctrl-C first.
-function dlfast() {
-	local url="$1" name final u host
-	local -a uris=()
+# dl <url> [aria2c options] — download with aria2c, faster on servers that
+# throttle each connection. aria2c allows at most 16 connections per host, so
+# when an http(s) link redirects to another host (download mirrors, CDNs) the
+# file is fetched from both at once: up to 32 connections. The redirect target
+# is used only if aria2c can reach it and it serves the same file (same size).
+# If that download fails, it falls back to the plain `aria2c -c -x 16 -s 16`.
+# Magnet, .torrent, ftp or several links run the plain command directly.
+# Resumes from an existing `.aria2` file — stop the old download first.
+unalias dl 2>/dev/null   # the old `alias dl=aria2c…` would shadow this function
+function dl() {
+	local url="$1" a final size rc
+	local -a uris extra=()
+	if ! command -v aria2c >/dev/null; then
+		echo -e "\e[31mdl needs aria2c, which is not installed — run: sudo apt install aria2\e[m" >&2
+		return 1
+	fi
 	if [ -z "$url" ]; then
-		echo "usage: dlfast <url>" >&2
+		echo "usage: dl <url> [aria2c options]" >&2
 		return 1
 	fi
-	name=$(basename -- "${url%%\?*}")
-	name=$(printf '%b' "${name//%/\\x}")
-	if pgrep -ax aria2c | grep -qF -- "$name"; then
-		echo -e "\e[33maria2c is already downloading \`$name\` — press Ctrl-C in that terminal first.\e[m" >&2
+	for a in "${@:2}"; do [[ $a == -* ]] || extra+=("$a"); done
+	if [[ ! $url =~ ^https?:// ]] || [ ${#extra[@]} -gt 0 ] || ! command -v curl >/dev/null; then
+		aria2c -c -x 16 -s 16 "$@"
+		return
+	fi
+	if pgrep -ax aria2c | grep -qF -- "${url%%\?*}"; then
+		echo -e "\e[33maria2c is already downloading this link — press Ctrl-C in that terminal first.\e[m" >&2
 		return 1
 	fi
-	final=$(curl -s -o /dev/null -m 15 -L -r 0-0 -w '%{url_effective}' "$url")
-	for u in "$url" ${final:+"$final"}; do
-		host=$(sed -E 's#^[a-zA-Z]+://([^/:]+).*#\1#' <<<"$u")
-		uris+=("$u" "${u/$host/$host.}")
-	done
-	mapfile -t uris < <(printf '%s\n' "${uris[@]}" | awk '!seen[$0]++')
-	echo "File: $name"
+	uris=("$url")
+	# file size from a 1-byte range request: "<code> <url_effective> <size>"
+	read -r a final size < <(curl -sL -o /dev/null -m 15 -r 0-0 -D - -w '%{http_code} %{url_effective}\n' "$url" \
+		| tr -d '\r' | awk -F/ 'tolower($0) ~ /^content-range:/{s=$NF} /^[0-9]+ /{l=$0} END{print l, s}')
+	if [ "$a" = 206 ] && [[ $size =~ ^[0-9]+$ ]] \
+		&& [ "$(sed -E 's#^[a-zA-Z]+://([^/]+).*#\1#' <<<"$final")" != "$(sed -E 's#^[a-zA-Z]+://([^/]+).*#\1#' <<<"$url")" ] \
+		&& [ "$(curl -s -o /dev/null -m 15 -r 0-0 -D - "$final" | tr -d '\r' | awk -F/ 'tolower($0) ~ /^content-range:/{print $NF}')" = "$size" ] \
+		&& aria2c -q --dry-run=true --max-tries=1 --connect-timeout=10 -d /tmp -o ".dl-probe-$$" "$final" 2>/dev/null; then
+		uris+=("$final")
+	fi
 	echo "Sources: ${#uris[@]} (up to $(( ${#uris[@]} * 16 )) connections)"
-	[ -f "$name.aria2" ] && echo "Resuming from $name.aria2"
-	aria2c -c -o "$name" -x 16 -s $(( ${#uris[@]} * 16 )) -k 1M \
-		--file-allocation=none --summary-interval=60 "${uris[@]}"
+	aria2c -c -x 16 -s $(( ${#uris[@]} * 16 )) -k 1M --summary-interval=60 "${@:2}" "${uris[@]}"
+	rc=$?
+	# 7 = stopped with Ctrl-C (unfinished): respect it, no fallback
+	if [ $rc -ne 0 ] && [ $rc -ne 7 ] && [ ${#uris[@]} -gt 1 ]; then
+		echo -e "\e[33mFast download failed (aria2c exit $rc) — retrying with the plain 16-connection download…\e[m" >&2
+		aria2c -c -x 16 -s 16 "${@:2}" "$url"
+		rc=$?
+	fi
+	return $rc
 }

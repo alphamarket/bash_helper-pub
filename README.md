@@ -111,7 +111,6 @@ Defined in `bh_aliases`.
 | `now` | Current date and time (`2026/10/12 23:06:59`) |
 | `ts` | Current Unix timestamp |
 | `pp` | Continuous `ping 8.8.8.8` that also reports missed replies |
-| `dl <url>` | Fast 16-connection download with `aria2c` |
 | `dl-tor` / `dl-mtor` | Download a torrent with `aria2c` (to disk / in memory) |
 | `pv <src> <dst>` | Copy with a progress bar (`rsync`) |
 | `kill-port <port>` | Kill whatever is listening on a port |
@@ -146,7 +145,7 @@ Defined in `bh_functions`.
 | `videos2mp4 [ffmpeg options]` | Convert every video in the current directory to MP4 |
 | `videos2sub` | Extract the first subtitle track of every video to `.srt` |
 | `t` | Open a new terminal window in the current directory (Xfce, GNOME, KDE, MATE, LXDE…) |
-| `dlfast <url>` | Download with up to 64 `aria2c` connections. aria2c allows only 16 per host, so the file is also requested via its redirect target and the `host.` spelling of each host. Resumes a stopped `dl`/`dlfast` from its `.aria2` file — press Ctrl-C on the old one first |
+| `dl <url> [aria2c options]` | Download with `aria2c`. aria2c allows only 16 connections per host, so when a link redirects to another host (mirror, CDN) the file is fetched from both at once — up to 32 connections, about twice as fast on servers that throttle each connection. If that fails it falls back to plain `aria2c -c -x 16 -s 16`; magnet, `.torrent`, FTP or several links use the plain command directly. Resumes a stopped download from its `.aria2` file — press Ctrl-C on the old one first. Needs `aria2c` (`sudo apt install aria2`) |
 
 ## Archive shortcuts
 
