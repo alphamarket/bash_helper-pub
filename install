@@ -9,6 +9,20 @@ fi
 
 git clone https://github.com/alphamarket/bash_helper-pub.git .bash_helper.d || exit 1
 
+# tools used by `dl` (aria2c + the bh_dl.py engine)
+missing=()
+for pair in aria2c:aria2 python3:python3 curl:curl; do
+	command -v "${pair%%:*}" &>/dev/null || missing+=("${pair##*:}")
+done
+if [ ${#missing[@]} -gt 0 ]; then
+	if command -v apt-get &>/dev/null; then
+		echo -e "\e[33mInstalling ${missing[*]} (needed by \`dl\`)…\e[m"
+		sudo apt-get install -y "${missing[@]}" || echo -e "\e[31mCould not install ${missing[*]} — \`dl\` will not work until you do.\e[m"
+	else
+		echo -e "\e[33mPlease install ${missing[*]} — \`dl\` needs them.\e[m"
+	fi
+fi
+
 if grep -Fq '. $HOME/.bash_helper.d/bash_helper' $HOME/.bashrc
 then
 	: # if already included

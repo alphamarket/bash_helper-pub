@@ -40,6 +40,7 @@ Modular and secret-safe: every feature is its own file, and machine-specific set
 - [Prompt](#prompt)
 - [Aliases](#aliases)
 - [Functions](#functions)
+- [Fast downloads: `dl`](#fast-downloads-dl)
 - [Archive shortcuts](#archive-shortcuts)
 - [Git shortcuts](#git-shortcuts)
 - [DNS switcher](#dns-switcher)
@@ -62,8 +63,9 @@ curl -fsSL https://raw.githubusercontent.com/alphamarket/bash_helper-pub/master/
 The installer:
 
 1. clones this repo into `~/.bash_helper.d`,
-2. adds one `source` line to `~/.bashrc`,
-3. downloads Git's official `git-prompt.sh` (for the branch name in the prompt).
+2. installs `aria2`, `python3` and `curl` with `apt` if missing (used by `dl`),
+3. adds one `source` line to `~/.bashrc`,
+4. downloads Git's official `git-prompt.sh` (for the branch name in the prompt).
 
 Open a new terminal and everything is active.
 
@@ -145,7 +147,26 @@ Defined in `bh_functions`.
 | `videos2mp4 [ffmpeg options]` | Convert every video in the current directory to MP4 |
 | `videos2sub` | Extract the first subtitle track of every video to `.srt` |
 | `t` | Open a new terminal window in the current directory (Xfce, GNOME, KDE, MATE, LXDE…) |
-| `dl <url> [aria2c options]` | Download with `aria2c`. aria2c allows only 16 connections per host, so when a link redirects to another host (mirror, CDN) the file is fetched from both at once — up to 32 connections, about twice as fast on servers that throttle each connection. If that fails it falls back to plain `aria2c -c -x 16 -s 16`; magnet, `.torrent`, FTP or several links use the plain command directly. Resumes a stopped download from its `.aria2` file — press Ctrl-C on the old one first. Needs `aria2c` (`sudo apt install aria2`) |
+| `dl <url> [-d dir] [-o name] [aria2c options]` | Fast, resumable download for any link — see [Fast downloads: `dl`](#fast-downloads-dl) |
+
+## Fast downloads: `dl`
+
+```bash
+dl '<url>'                       # download into the current directory
+dl '<url>' -d ~/Videos -o a.mkv  # choose folder / file name
+dl 'magnet:?xt=…'                # anything else goes to aria2c as before
+```
+
+Many download servers cap the speed of **each connection** (e.g. ~75 KiB/s), so the total grows with the number of connections — until the server starts stalling them. `aria2c` stops at 16 per server; `dl` finds the best number by itself:
+
+- **No separate speed test** — the download itself is the probe. It starts with 16 connections, doubles them every ~4 s while the total keeps rising (up to 128), steps back when it stops paying off, and tries one level up again every minute.
+- **Segments like IDM.** Each connection keeps reading its own stretch of the file; a new connection takes over the largest gap nobody is working on.
+- **Live colour display.** A map of the whole file whose columns fill upwards (green = downloaded, amber = a connection is writing there), a status line (percentage, size, speed, time left, connections) and an IDM-style list of every connection with its own segment bar, percentage and speed. `NO_COLOR=1` turns colours off; piped output gets a plain status line every 60 s (`--summary-interval`).
+- **aria2c-compatible.** Progress is kept in a real `<file>.aria2` control file, so `dl` resumes downloads started by `aria2c` and `aria2c -c` resumes downloads started by `dl`.
+- **Ctrl-C** once stops cleanly and keeps the progress (exit 7, like aria2c); twice stops immediately. Run the same `dl` command to continue.
+- **Falls back to aria2c** (`aria2c -c -x 16 -s 16`) for magnet links, `.torrent`, FTP, several links, other aria2c options, servers that do not support ranges — and when a download fails mid-way, aria2c continues it from the same `.aria2` file.
+- Follows redirects (mirrors, CDNs, expiring signed links are re-resolved), uses the server's file name (`Content-Disposition`), honours `http(s)_proxy`, and never overwrites a different existing file (`name.1.ext`, like aria2c).
+- Refuses to start when the same link is already downloading in another terminal.
 
 ## Archive shortcuts
 
@@ -336,13 +357,15 @@ Or set them interactively with `dns-default-ip-setup`, `dns-proxy-ip-setup` and 
 | `net-setup` | One-time root setup for Wi-Fi, TCP, DNS and the user services |
 | `dns-pin.dispatcher` | NetworkManager hook installed by `net-setup` |
 | `dns-autoreset`, `vpn-watchdog` (+ `.service`) | Per-user services installed by `net-setup` |
+| `bh_dl.py` | The adaptive download engine behind `dl` (Python standard library only) |
 | `install` | The one-line installer |
 
 ## Requirements
 
 - **Bash 4+** on Linux — developed on Ubuntu 24.04; Debian/Ubuntu-based distros work out of the box.
 - **DNS switcher and `net-setup`:** NetworkManager + systemd-resolved (the Ubuntu desktop default).
-- **Optional tools** for related shortcuts: `aria2c`, `ffmpeg`, `rsync`, `xclip`, `npx` (`kill-port`), `7z`, `rar`, `lha`.
+- **`dl`:** `aria2c`, `python3` 3.8+, `curl` (installed by the installer).
+- **Optional tools** for related shortcuts: `ffmpeg`, `rsync`, `xclip`, `npx` (`kill-port`), `7z`, `rar`, `lha`.
 
 ## Uninstall
 
